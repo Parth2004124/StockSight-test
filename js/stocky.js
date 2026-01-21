@@ -210,19 +210,30 @@ function getFollowUpSuggestions(intentType, contextData) {
     return '';
 }
 
-function formatExplanation(rawText) {
-    if (!rawText) return "standard metrics";
-    let text = rawText.replace(/\(.*\)/, '').trim(); 
+// HELPER: Improved Phrasing Logic
+function formatExplanation(rawText, score) {
+    if (!rawText) return "standard fundamental metrics";
+    let text = rawText.replace(/\(.*\)/, '').trim(); // Remove (Sector) suffix
+    
+    // Dictionary of raw explanations mapped to NEUTRAL concepts
     const map = {
-        "Stable": "steady growth and consistent margins",
-        "Weak": "declining fundamentals or overvaluation",
-        "Strong": "excellent growth and profitability",
-        "Data Partial": "limited available data",
-        "Low Margin": "margins below industry standards",
-        "Sales Drag": "slowing revenue growth",
-        "Trend Strength": "positive price momentum"
+        "Stable": "steady growth profile",
+        "Weak": "declining fundamentals",
+        "Strong": "robust growth momentum",
+        "Data Partial": "limited data availability",
+        "Low Margin": "below-average margins",
+        "Sales Drag": "slowing top-line sales",
+        "Trend Strength": "technical momentum"
     };
-    return map[text] || text.toLowerCase();
+    
+    let baseText = map[text] || text.toLowerCase();
+
+    // Contextual Adjustment based on Score
+    if (score < 40 && text === "Stable") {
+        return "stagnant growth (stability without upside)";
+    }
+    
+    return baseText;
 }
 
 // Async Generator
@@ -297,24 +308,24 @@ async function generateStockyResponse(query) {
             
             let fScore = calculateFundamentalScore(data);
             if (fScore) fScore = normalizeFundamentalScore(fScore, data);
-            const pScore = calculatePortersScore(data); // NEW: Calculate Porter Score
+            const pScore = calculatePortersScore(data); 
             
             if (intent.focus === 'LEVELS' && data.levels) {
                 reply = `<b>Levels for ${data.name}:</b>\n🎯 Target: ₹${data.levels.target ? data.levels.target.toLocaleString() : 'N/A'}\n🛑 Stop/Entry: ₹${(data.levels.sl || data.levels.entry).toLocaleString()}`;
             } else if (intent.focus === 'RISK') {
                 reply = `<b>Risk Assessment (${data.name}):</b>\nRisk Score: ${fScore.risk}/20\nBeta: ${data.beta || 'N/A'}\nVerdict: ${data.beta > 1.2 ? 'High Volatility' : 'Stable'}`;
             } else {
-                // DUAL SCORE REPORTING
+                // IMPROVED PHRASING LOGIC
                 const score = fScore.total;
-                const reason = formatExplanation(data.explanation);
+                const reason = formatExplanation(data.explanation, score);
                 const action = data.action;
                 
                 // Porter Analysis
                 const porterVal = pScore ? pScore.total : 'N/A';
                 let porterText = "";
                 if (pScore) {
-                    if (pScore.total > 60) porterText = "High Moat (Quality)";
-                    else if (pScore.total < 40) porterText = "Low Moat (Commoditized)";
+                    if (pScore.total > 60) porterText = "High Moat";
+                    else if (pScore.total < 40) porterText = "Low Moat";
                     else porterText = "Moderate Moat";
                 }
 
@@ -322,14 +333,18 @@ async function generateStockyResponse(query) {
                 if (score >= 65) {
                     narrative = `This high score reflects <b>${reason}</b>, supporting a bullish outlook.`;
                 } else if (score <= 40) {
-                    narrative = `The score is weighed down by <b>${reason}</b>, suggesting caution.`;
+                    // Logic fix: Don't blame "steady growth" for a low score.
+                    if (reason.includes("steady") || reason.includes("consistent")) {
+                        narrative = `While showing <b>${reason}</b>, the stock is currently penalized for low valuation appeal or sector-specific risks.`;
+                    } else {
+                        narrative = `The score is weighed down by <b>${reason}</b>, suggesting caution.`;
+                    }
                 } else {
                     narrative = `The fundamentals show <b>${reason}</b>, which is decent but indicates it's better to hold or wait for a dip.`;
                 }
 
                 let entryTxt = data.levels.entry ? `Look to enter around <b>₹${data.levels.entry.toLocaleString()}</b>.` : `Watch the stop loss at <b>₹${data.levels.sl.toLocaleString()}</b>.`;
 
-                // NEW FORMAT: Disclosing both scores explicitly
                 reply = `<b>${data.name} Analysis</b>\n\nMy Verdict: <b>${action}</b>\n\n<b>Scores:</b>\n- Fundamental: <b>${score}/100</b> (Timing/Health)\n- Porter's 5: <b>${porterVal}/100</b> (${porterText})\n\n${narrative}\n\n${entryTxt}`;
             }
             break;
