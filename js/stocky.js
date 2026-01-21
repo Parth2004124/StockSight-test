@@ -213,13 +213,13 @@ function generateStockyResponse(query) {
             let tone = "stable";
             if (health > 65) tone = "strong";
             if (health < 40) tone = "struggling";
-            reply = `Based on my analysis, your portfolio's structural health is **${tone}** with a composite score of **${health}/100**.\n\nThis score reflects the weighted average quality of your holdings.`;
+            reply = `Based on my analysis, your portfolio's structural health is <b>${tone}</b> with a composite score of <b>${health}/100</b>.\n\nThis score reflects the weighted average quality of your holdings.`;
             break;
 
         case 'RISK':
             const divScore = portfolioAnalytics.risk.divScore || 0;
             const sectors = (portfolioAnalytics.risk.sectors || []).map(s => s[0]).join(', ');
-            reply = `**Risk Profile:**\nDiversification Score: ${divScore}/100\n`;
+            reply = `<b>Risk Profile:</b>\nDiversification Score: ${divScore}/100\n`;
             if (sectors) reply += `Sector Exposure: Heavily weighted in ${sectors}.`;
             else reply += `\n✅ Allocation looks balanced across sectors.`;
             break;
@@ -237,7 +237,7 @@ function generateStockyResponse(query) {
         case 'EXPLAIN_ALLOCATION':
             const alloc = stockyContext.lastAllocation;
             if(!alloc) reply = "I haven't generated an allocation yet.";
-            else reply = `I used a **Score-Weighted Strategy**. Assets with higher scores like **${alloc.topPicks[0].name}** received more capital.`;
+            else reply = `I used a <b>Score-Weighted Strategy</b>. Assets with higher scores like <b>${alloc.topPicks[0].name}</b> received more capital.`;
             break;
 
         case 'EXPLAIN':
@@ -249,29 +249,26 @@ function generateStockyResponse(query) {
             if (fScore) fScore = normalizeFundamentalScore(fScore, data);
             
             if (intent.focus === 'LEVELS' && data.levels) {
-                reply = `**Levels for ${data.name}:**\n🎯 Target: ₹${data.levels.target ? data.levels.target.toLocaleString() : 'N/A'}\n🛑 Stop/Entry: ₹${(data.levels.sl || data.levels.entry).toLocaleString()}`;
+                reply = `<b>Levels for ${data.name}:</b>\n🎯 Target: ₹${data.levels.target ? data.levels.target.toLocaleString() : 'N/A'}\n🛑 Stop/Entry: ₹${(data.levels.sl || data.levels.entry).toLocaleString()}`;
             } else if (intent.focus === 'RISK') {
-                reply = `**Risk Assessment (${data.name}):**\nRisk Score: ${fScore.risk}/20\nBeta: ${data.beta || 'N/A'}\nVerdict: ${data.beta > 1.2 ? 'High Volatility' : 'Stable'}`;
+                reply = `<b>Risk Assessment (${data.name}):</b>\nRisk Score: ${fScore.risk}/20\nBeta: ${data.beta || 'N/A'}\nVerdict: ${data.beta > 1.2 ? 'High Volatility' : 'Stable'}`;
             } else {
-                // FIXED NATURAL LANGUAGE FLOW
                 const score = fScore.total;
                 const reason = formatExplanation(data.explanation);
                 const action = data.action;
                 
-                // Logic to select the narrative based on SCORE, not just Action
                 let narrative = "";
                 if (score >= 65) {
-                    narrative = `This high score reflects **${reason}**, supporting a bullish outlook.`;
+                    narrative = `This high score reflects <b>${reason}</b>, supporting a bullish outlook.`;
                 } else if (score <= 40) {
-                    narrative = `The score is weighed down by **${reason}**, suggesting caution.`;
+                    narrative = `The score is weighed down by <b>${reason}</b>, suggesting caution.`;
                 } else {
-                    narrative = `The fundamentals show **${reason}**, which is decent but indicates it's better to hold or wait for a dip.`;
+                    narrative = `The fundamentals show <b>${reason}</b>, which is decent but indicates it's better to hold or wait for a dip.`;
                 }
 
-                let entryTxt = data.levels.entry ? `Look to enter around **₹${data.levels.entry.toLocaleString()}**.` : `Watch the stop loss at **₹${data.levels.sl.toLocaleString()}**.`;
+                let entryTxt = data.levels.entry ? `Look to enter around <b>₹${data.levels.entry.toLocaleString()}</b>.` : `Watch the stop loss at <b>₹${data.levels.sl.toLocaleString()}</b>.`;
 
-                // CHANGED PHRASING TO "My Verdict" to confirm update
-                reply = `**${data.name} Analysis**\n\nMy Verdict: **${action}** (Score: ${score})\n\n${narrative}\n\n${entryTxt}`;
+                reply = `<b>${data.name} Analysis</b>\n\nMy Verdict: <b>${action}</b> (Score: ${score})\n\n${narrative}\n\n${entryTxt}`;
             }
             break;
 
