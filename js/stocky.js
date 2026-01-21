@@ -253,19 +253,25 @@ function generateStockyResponse(query) {
             } else if (intent.focus === 'RISK') {
                 reply = `**Risk Assessment (${data.name}):**\nRisk Score: ${fScore.risk}/20\nBeta: ${data.beta || 'N/A'}\nVerdict: ${data.beta > 1.2 ? 'High Volatility' : 'Stable'}`;
             } else {
-                // IMPROVED NATURAL LANGUAGE FLOW
+                // FIXED NATURAL LANGUAGE FLOW
                 const score = fScore.total;
                 const reason = formatExplanation(data.explanation);
                 const action = data.action;
                 
+                // Logic to select the narrative based on SCORE, not just Action
                 let narrative = "";
-                if (score >= 65) narrative = `This high score reflects **${reason}**, supporting a bullish outlook.`;
-                else if (score <= 40) narrative = `The score is weighed down by **${reason}**, suggesting caution.`;
-                else narrative = `The fundamentals show **${reason}**, which is decent but lacks strong momentum.`;
+                if (score >= 65) {
+                    narrative = `This high score reflects **${reason}**, supporting a bullish outlook.`;
+                } else if (score <= 40) {
+                    narrative = `The score is weighed down by **${reason}**, suggesting caution.`;
+                } else {
+                    narrative = `The fundamentals show **${reason}**, which is decent but indicates it's better to hold or wait for a dip.`;
+                }
 
                 let entryTxt = data.levels.entry ? `Look to enter around **₹${data.levels.entry.toLocaleString()}**.` : `Watch the stop loss at **₹${data.levels.sl.toLocaleString()}**.`;
 
-                reply = `**${data.name} Analysis**\n\nI rate this as a **${action}** (Score: ${score}).\n\n${narrative}\n\n${entryTxt}`;
+                // CHANGED PHRASING TO "My Verdict" to confirm update
+                reply = `**${data.name} Analysis**\n\nMy Verdict: **${action}** (Score: ${score})\n\n${narrative}\n\n${entryTxt}`;
             }
             break;
 
