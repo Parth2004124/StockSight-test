@@ -2,13 +2,13 @@
 
 // Local state for the bot - PERSISTENT CONTEXT
 let stockyContext = { 
-    lastAsset: null,       // The last stock symbol discussed (e.g., "TCS")
-    lastIntent: null,      // The last action performed (e.g., "EXPLAIN")
-    lastAllocation: null   // Data from the last allocation simulation
+    lastAsset: null,       
+    lastIntent: null,      
+    lastAllocation: null   
 };
 
 // Main Handler called by the UI
-function handleStockyMessage() {
+async function handleStockyMessage() {
     const input = document.getElementById('stocky-input');
     const msg = input.value.trim();
     if (!msg) return;
@@ -17,18 +17,24 @@ function handleStockyMessage() {
     addStockyMessage('user', msg);
     input.value = '';
     
-    // Logic: Generate Response with delay
-    setTimeout(() => {
-        const response = generateStockyResponse(msg);
-        addStockyMessage('bot', response);
+    // Logic: Generate Response (Async allowed now)
+    // Small artificial delay for "thinking" feel
+    setTimeout(async () => {
+        try {
+            const response = await generateStockyResponse(msg);
+            addStockyMessage('bot', response);
+        } catch (e) {
+            console.error(e);
+            addStockyMessage('bot', "I encountered an error processing that request.");
+        }
     }, 600);
 }
 
 // --- NLP ENGINE ---
 
 const NLP_SYNONYMS = {
-    'buy': ['purchase', 'invest', 'add', 'get', 'buying'],
-    'sell': ['exit', 'remove', 'dump', 'selling', 'short'],
+    'buy': ['purchase', 'invest', 'add', 'get', 'buying', 'long'],
+    'sell': ['exit', 'remove', 'dump', 'selling', 'short', 'book'],
     'risk': ['safe', 'safety', 'danger', 'volatility', 'beta', 'risky'],
     'target': ['goal', 'upside', 'reach', 'expect', 'sl', 'stoploss', 'stop', 'level', 'levels'],
     'score': ['rating', 'grade', 'points', 'good', 'bad', 'quality', 'analysis', 'rank'],
@@ -53,26 +59,27 @@ function mapQueryToIntent(query) {
     const rawQ = query.toLowerCase();
     const q = normalizeText(rawQ); 
     
-    const assets = Object.keys(stockAnalysis).filter(sym => {
+    // 1. Identify Known Assets
+    const knownAssets = Object.keys(stockAnalysis).filter(sym => {
         const s = sym.toLowerCase();
         const n = stockAnalysis[sym].name.toLowerCase();
         return new RegExp(`\\b${s}\\b`).test(rawQ) || rawQ.includes(n);
     });
     
-    if (assets.length > 0) {
-        if (assets.length === 1) stockyContext.lastAsset = assets[0];
+    if (knownAssets.length > 0) {
+        if (knownAssets.length === 1) stockyContext.lastAsset = knownAssets[0];
     }
 
-    // 1. COMPARISON
+    // 2. COMPARISON
     if (q.includes('compare')) {
-        if (assets.length >= 2) return { type: 'COMPARE', assets: assets.slice(0, 2) };
-        if (assets.length === 1 && stockyContext.lastAsset && stockyContext.lastAsset !== assets[0]) {
-            return { type: 'COMPARE', assets: [stockyContext.lastAsset, assets[0]] };
+        if (knownAssets.length >= 2) return { type: 'COMPARE', assets: knownAssets.slice(0, 2) };
+        if (knownAssets.length === 1 && stockyContext.lastAsset && stockyContext.lastAsset !== knownAssets[0]) {
+            return { type: 'COMPARE', assets: [stockyContext.lastAsset, knownAssets[0]] };
         }
     }
 
-    // 2. SPECIFIC ASSET ANALYSIS
-    let targetAsset = assets.length > 0 ? assets[0] : null;
+    // 3. SPECIFIC ASSET ANALYSIS (Known)
+    let targetAsset = knownAssets.length > 0 ? knownAssets[0] : null;
 
     if (!targetAsset && stockyContext.lastAsset) {
         const contextTriggers = ['it', 'this', 'that', 'stock', 'share', 'company', ...NLP_SYNONYMS.score, ...NLP_SYNONYMS.target, ...NLP_SYNONYMS.risk];
@@ -91,12 +98,31 @@ function mapQueryToIntent(query) {
         return { type: 'EXPLAIN', ...intentData };
     }
 
-    // 3. GLOBAL QUERIES
+    // 4. UNKNOWN STOCK DETECTION (The "Watchlist-First" Logic)
+    // Look for patterns like "Analyze ZOMATO" or "Check PAYTM" where ZOMATO is not in system
+    const fetchTriggers = ['analyze', 'check', 'explain', 'add', 'score', 'buy', 'sell'];
+    if (fetchTriggers.some(t => q.includes(t))) {
+        // Regex to find potential ticker words (UPPERCASE or Capitalized often, but user might type lowercase)
+        // We look for the word immediately following the trigger, or any standalone word that looks like a symbol
+        const words = rawQ.split(' ');
+        for (let word of words) {
+            // Basic heuristic: 3-10 chars, not a common keyword
+            const cleanWord = word.replace(/[^a-z0-9]/gi, '').toUpperCase();
+            if (cleanWord.length >= 3 && cleanWord.length <= 12 && !NLP_SYNONYMS[cleanWord.toLowerCase()] && !fetchTriggers.includes(cleanWord.toLowerCase())) {
+                // Check if it's already known (redundant but safe)
+                if (!stockAnalysis[cleanWord]) {
+                    return { type: 'FETCH_NEW', symbol: cleanWord };
+                }
+            }
+        }
+    }
+
+    // 5. GLOBAL QUERIES
     if (q.includes('health') || (q.includes('my') && q.includes('portfolio'))) return { type: 'SUMMARY' };
     if (q.includes('risk')) return { type: 'RISK' };
     if (q.includes('efficiency')) return { type: 'EFFICIENCY' };
 
-    // 4. ALLOCATION SIM
+    // 6. ALLOCATION SIM
     const numberPattern = /[\d,]+(\.\d+)?\s*(k|l|cr|m|b|lakh|crore)?/i;
     const allocKeywords = ['allocate', 'invest', 'have', 'capital', 'fund'];
     
@@ -110,7 +136,7 @@ function mapQueryToIntent(query) {
             else if (unit.startsWith('c')) val *= 10000000;
             else if (unit.startsWith('m')) val *= 1000000;
             else if (unit.startsWith('b')) val *= 1000000000;
-            const reqAssets = assets.length > 0 ? assets : []; 
+            const reqAssets = knownAssets.length > 0 ? knownAssets : []; 
             return { type: 'ALLOCATION_SIM', amount: val, assets: reqAssets };
         }
     }
@@ -120,6 +146,7 @@ function mapQueryToIntent(query) {
     return { type: 'UNSUPPORTED' };
 }
 
+// Logic to simulate portfolio allocation
 function simulateCapitalAllocation(amount, specificAssets) {
     let candidates = [];
     if (specificAssets.length > 0) {
@@ -179,6 +206,8 @@ function getFollowUpSuggestions(intentType, contextData) {
         suggestions = ["How to improve diversification?", "Show my capital efficiency"];
     } else if (intentType === 'ALLOCATION_SIM') {
         suggestions = ["Why did you choose these?", "Check portfolio health"];
+    } else if (intentType === 'FETCH_NEW') {
+        suggestions = [`Score for ${contextData.symbol}`, `Buy or Sell ${contextData.symbol}?`];
     }
     
     if (suggestions.length > 0) {
@@ -187,7 +216,6 @@ function getFollowUpSuggestions(intentType, contextData) {
     return '';
 }
 
-// HELPER: Humanize Explanation
 function formatExplanation(rawText) {
     if (!rawText) return "standard metrics";
     let text = rawText.replace(/\(.*\)/, '').trim(); 
@@ -203,11 +231,51 @@ function formatExplanation(rawText) {
     return map[text] || text.toLowerCase();
 }
 
-function generateStockyResponse(query) {
+// Async Generator
+async function generateStockyResponse(query) {
     const intent = mapQueryToIntent(query);
     let reply = "";
 
     switch (intent.type) {
+        case 'FETCH_NEW':
+            const sym = intent.symbol;
+            addStockyMessage('bot', `I don't have **${sym}** in your list yet. \n\nAdding to Watchlist and analyzing...`);
+            
+            try {
+                // 1. Add to Portfolio State (Watchlist Mode)
+                if (typeof portfolio !== 'undefined' && !portfolio[sym]) {
+                    portfolio[sym] = { qty: 0, avg: 0 };
+                    // We must update the UI state
+                    if (typeof switchTab === 'function') switchTab('watchlist'); 
+                    if (typeof renderWatchlistItem === 'function') renderWatchlistItem(sym, true);
+                    if (typeof createCardSkeleton === 'function') createCardSkeleton(sym);
+                }
+
+                // 2. Trigger Fetch (Async wait)
+                if (typeof fetchAsset === 'function') {
+                    await fetchAsset(sym); // This will update stockAnalysis[sym]
+                } else {
+                    throw new Error("Data engine unavailable");
+                }
+
+                // 3. Verify Data Arrived
+                if (stockAnalysis[sym]) {
+                    // 4. Recursive Call to Explain the new asset
+                    // We construct a fake intent to fall through to EXPLAIN
+                    intent.type = 'EXPLAIN';
+                    intent.asset = sym;
+                    stockyContext.lastAsset = sym; // Set context
+                    // Jump to EXPLAIN logic below...
+                } else {
+                    return `I tried to fetch **${sym}** but couldn't retrieve valid data. It might be delisted or a bad ticker.`;
+                }
+            } catch (e) {
+                return `Failed to analyze **${sym}**. Network or Source error.`;
+            }
+            // Intentional fall-through to EXPLAIN is tricky in switch-case, so we handle it by recursively calling or copy-pasting logic. 
+            // Better to recursively call to keep DRY.
+            return generateStockyResponse(`explain ${sym}`);
+
         case 'SUMMARY':
             const health = portfolioAnalytics.healthScore || 0;
             let tone = "stable";
