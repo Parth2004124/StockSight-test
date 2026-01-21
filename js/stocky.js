@@ -18,7 +18,6 @@ async function handleStockyMessage() {
     input.value = '';
     
     // Logic: Generate Response (Async allowed now)
-    // Small artificial delay for "thinking" feel
     setTimeout(async () => {
         try {
             const response = await generateStockyResponse(msg);
@@ -37,7 +36,7 @@ const NLP_SYNONYMS = {
     'sell': ['exit', 'remove', 'dump', 'selling', 'short', 'book'],
     'risk': ['safe', 'safety', 'danger', 'volatility', 'beta', 'risky'],
     'target': ['goal', 'upside', 'reach', 'expect', 'sl', 'stoploss', 'stop', 'level', 'levels'],
-    'score': ['rating', 'grade', 'points', 'good', 'bad', 'quality', 'analysis', 'rank'],
+    'score': ['rating', 'grade', 'points', 'good', 'bad', 'quality', 'analysis', 'rank', 'fundamental', 'porter'],
     'health': ['status', 'summary', 'overview', 'doing', 'performance', 'report'],
     'allocation': ['distribute', 'divide', 'spread', 'invest', 'money', 'capital', 'funds'],
     'compare': ['versus', 'vs', 'difference', 'better'],
@@ -92,24 +91,19 @@ function mapQueryToIntent(query) {
         let intentData = { asset: targetAsset };
         if (q.includes('target') || q.includes('level')) intentData.focus = 'LEVELS';
         else if (q.includes('risk')) intentData.focus = 'RISK';
-        else if (q.includes('score') || q.includes('why')) intentData.focus = 'SCORE'; 
+        else if (q.includes('score') || q.includes('why') || q.includes('porter') || q.includes('fundamental')) intentData.focus = 'SCORE'; 
         else if (q.includes('buy') || q.includes('sell')) intentData.focus = 'SIGNAL'; 
         
         return { type: 'EXPLAIN', ...intentData };
     }
 
-    // 4. UNKNOWN STOCK DETECTION (The "Watchlist-First" Logic)
-    // Look for patterns like "Analyze ZOMATO" or "Check PAYTM" where ZOMATO is not in system
+    // 4. UNKNOWN STOCK DETECTION (Watchlist-First)
     const fetchTriggers = ['analyze', 'check', 'explain', 'add', 'score', 'buy', 'sell'];
     if (fetchTriggers.some(t => q.includes(t))) {
-        // Regex to find potential ticker words (UPPERCASE or Capitalized often, but user might type lowercase)
-        // We look for the word immediately following the trigger, or any standalone word that looks like a symbol
         const words = rawQ.split(' ');
         for (let word of words) {
-            // Basic heuristic: 3-10 chars, not a common keyword
             const cleanWord = word.replace(/[^a-z0-9]/gi, '').toUpperCase();
             if (cleanWord.length >= 3 && cleanWord.length <= 12 && !NLP_SYNONYMS[cleanWord.toLowerCase()] && !fetchTriggers.includes(cleanWord.toLowerCase())) {
-                // Check if it's already known (redundant but safe)
                 if (!stockAnalysis[cleanWord]) {
                     return { type: 'FETCH_NEW', symbol: cleanWord };
                 }
@@ -239,41 +233,29 @@ async function generateStockyResponse(query) {
     switch (intent.type) {
         case 'FETCH_NEW':
             const sym = intent.symbol;
-            addStockyMessage('bot', `I don't have **${sym}** in your list yet. \n\nAdding to Watchlist and analyzing...`);
-            
+            addStockyMessage('bot', `I don't have <b>${sym}</b> in your list yet. \n\nAdding to Watchlist and analyzing...`);
             try {
-                // 1. Add to Portfolio State (Watchlist Mode)
                 if (typeof portfolio !== 'undefined' && !portfolio[sym]) {
                     portfolio[sym] = { qty: 0, avg: 0 };
-                    // We must update the UI state
                     if (typeof switchTab === 'function') switchTab('watchlist'); 
                     if (typeof renderWatchlistItem === 'function') renderWatchlistItem(sym, true);
                     if (typeof createCardSkeleton === 'function') createCardSkeleton(sym);
                 }
-
-                // 2. Trigger Fetch (Async wait)
                 if (typeof fetchAsset === 'function') {
-                    await fetchAsset(sym); // This will update stockAnalysis[sym]
+                    await fetchAsset(sym); 
                 } else {
                     throw new Error("Data engine unavailable");
                 }
-
-                // 3. Verify Data Arrived
                 if (stockAnalysis[sym]) {
-                    // 4. Recursive Call to Explain the new asset
-                    // We construct a fake intent to fall through to EXPLAIN
                     intent.type = 'EXPLAIN';
                     intent.asset = sym;
-                    stockyContext.lastAsset = sym; // Set context
-                    // Jump to EXPLAIN logic below...
+                    stockyContext.lastAsset = sym;
                 } else {
-                    return `I tried to fetch **${sym}** but couldn't retrieve valid data. It might be delisted or a bad ticker.`;
+                    return `I tried to fetch <b>${sym}</b> but couldn't retrieve valid data. It might be delisted or a bad ticker.`;
                 }
             } catch (e) {
-                return `Failed to analyze **${sym}**. Network or Source error.`;
+                return `Failed to analyze <b>${sym}</b>. Network or Source error.`;
             }
-            // Intentional fall-through to EXPLAIN is tricky in switch-case, so we handle it by recursively calling or copy-pasting logic. 
-            // Better to recursively call to keep DRY.
             return generateStockyResponse(`explain ${sym}`);
 
         case 'SUMMARY':
@@ -315,16 +297,27 @@ async function generateStockyResponse(query) {
             
             let fScore = calculateFundamentalScore(data);
             if (fScore) fScore = normalizeFundamentalScore(fScore, data);
+            const pScore = calculatePortersScore(data); // NEW: Calculate Porter Score
             
             if (intent.focus === 'LEVELS' && data.levels) {
                 reply = `<b>Levels for ${data.name}:</b>\n🎯 Target: ₹${data.levels.target ? data.levels.target.toLocaleString() : 'N/A'}\n🛑 Stop/Entry: ₹${(data.levels.sl || data.levels.entry).toLocaleString()}`;
             } else if (intent.focus === 'RISK') {
                 reply = `<b>Risk Assessment (${data.name}):</b>\nRisk Score: ${fScore.risk}/20\nBeta: ${data.beta || 'N/A'}\nVerdict: ${data.beta > 1.2 ? 'High Volatility' : 'Stable'}`;
             } else {
+                // DUAL SCORE REPORTING
                 const score = fScore.total;
                 const reason = formatExplanation(data.explanation);
                 const action = data.action;
                 
+                // Porter Analysis
+                const porterVal = pScore ? pScore.total : 'N/A';
+                let porterText = "";
+                if (pScore) {
+                    if (pScore.total > 60) porterText = "High Moat (Quality)";
+                    else if (pScore.total < 40) porterText = "Low Moat (Commoditized)";
+                    else porterText = "Moderate Moat";
+                }
+
                 let narrative = "";
                 if (score >= 65) {
                     narrative = `This high score reflects <b>${reason}</b>, supporting a bullish outlook.`;
@@ -336,7 +329,8 @@ async function generateStockyResponse(query) {
 
                 let entryTxt = data.levels.entry ? `Look to enter around <b>₹${data.levels.entry.toLocaleString()}</b>.` : `Watch the stop loss at <b>₹${data.levels.sl.toLocaleString()}</b>.`;
 
-                reply = `<b>${data.name} Analysis</b>\n\nMy Verdict: <b>${action}</b> (Score: ${score})\n\n${narrative}\n\n${entryTxt}`;
+                // NEW FORMAT: Disclosing both scores explicitly
+                reply = `<b>${data.name} Analysis</b>\n\nMy Verdict: <b>${action}</b>\n\n<b>Scores:</b>\n- Fundamental: <b>${score}/100</b> (Timing/Health)\n- Porter's 5: <b>${porterVal}/100</b> (${porterText})\n\n${narrative}\n\n${entryTxt}`;
             }
             break;
 
@@ -348,8 +342,10 @@ async function generateStockyResponse(query) {
             
             let s1 = calculateFundamentalScore(d1); if(s1) s1 = normalizeFundamentalScore(s1, d1);
             let s2 = calculateFundamentalScore(d2); if(s2) s2 = normalizeFundamentalScore(s2, d2);
+            let p1 = calculatePortersScore(d1);
+            let p2 = calculatePortersScore(d2);
             
-            reply = `<div class="font-bold mb-1">Comparison: ${d1.name} vs ${d2.name}</div><table class="w-full text-xs border border-gray-200 rounded"><tr class="bg-gray-50"><th class="p-1 text-left">Metric</th><th class="p-1 text-right">${d1.name.substr(0,4)}</th><th class="p-1 text-right">${d2.name.substr(0,4)}</th></tr><tr class="border-t"><td class="p-1">Score</td><td class="p-1 text-right font-bold">${s1.total}</td><td class="p-1 text-right font-bold">${s2.total}</td></tr><tr class="border-t"><td class="p-1">Signal</td><td class="p-1 text-right">${d1.action}</td><td class="p-1 text-right">${d2.action}</td></tr><tr class="border-t"><td class="p-1">Price</td><td class="p-1 text-right">₹${d1.price}</td><td class="p-1 text-right">₹${d2.price}</td></tr></table><div class="mt-2 text-[10px] italic">System favors ${d1.action === 'BUY NOW' && d2.action !== 'BUY NOW' ? d1.name : (d2.action === 'BUY NOW' && d1.action !== 'BUY NOW' ? d2.name : "neither based on signal")}.</div>`;
+            reply = `<div class="font-bold mb-1">Comparison: ${d1.name} vs ${d2.name}</div><table class="w-full text-xs border border-gray-200 rounded"><tr class="bg-gray-50"><th class="p-1 text-left">Metric</th><th class="p-1 text-right">${d1.name.substr(0,4)}</th><th class="p-1 text-right">${d2.name.substr(0,4)}</th></tr><tr class="border-t"><td class="p-1">Fundamental</td><td class="p-1 text-right font-bold">${s1.total}</td><td class="p-1 text-right font-bold">${s2.total}</td></tr><tr class="border-t"><td class="p-1">Porter's (Quality)</td><td class="p-1 text-right">${p1 ? p1.total : '-'}</td><td class="p-1 text-right">${p2 ? p2.total : '-'}</td></tr><tr class="border-t"><td class="p-1">Signal</td><td class="p-1 text-right">${d1.action}</td><td class="p-1 text-right">${d2.action}</td></tr></table><div class="mt-2 text-[10px] italic">System favors ${d1.action === 'BUY NOW' && d2.action !== 'BUY NOW' ? d1.name : (d2.action === 'BUY NOW' && d1.action !== 'BUY NOW' ? d2.name : "neither based on signal")}.</div>`;
             break;
 
         default:
